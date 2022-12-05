@@ -1,6 +1,6 @@
 BUILD=go build
 DOCKER?=docker
-SOURCE_DIR=.
+SOURCE_DIR=src
 BIN_NAME=go-ab
 REGISTRY?=registry.cn-beijing.aliyuncs.com/adebug-middlewares
 DOCKER_TAG?=0.0.1
@@ -12,6 +12,7 @@ TEMP_DIR_SERVER:=$(shell mktemp -d)
 build:
 #	cd ${SOURCE_DIR}; CGO_ENABLED=0 GOARCH=amd64 GOOS=linux ${BUILD} -o ${BIN_NAME} *.go
 	cd ${SOURCE_DIR}; CGO_ENABLED=0 ${BUILD} -o ${BIN_NAME} *.go
+	mv ${SOURCE_DIR}/${BIN_NAME} ./${BIN_NAME}
 #release:
 #  cd ${SOURCE_DIR}; CGO_ENABLED=0 GOARCH=amd64 GOOS=linux ${BUILD} -o ${BIN_NAME} .
 #  cd ${SOURCE_DIR}; mv ${BIN_NAME} ${TEMP_DIR_SERVER}/appd

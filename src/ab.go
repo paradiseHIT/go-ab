@@ -92,7 +92,8 @@ func (c *AbBenchmark) PrintConfig() {
 	}
 	glog.Infof("config Method:\t\t\t\t%s", c.method)
 	glog.Infof("config request_num_in_file:\t\t%d", c.request_num_in_file)
-	glog.Infof("config content_type:\t\t%s", c.content_type)
+	glog.Infof("config content_type:\t\t\t%s", c.content_type)
+	glog.Infof("config time_out:\t\t\t%d", c.time_out)
 	if len(c.hs) > 0 {
 		glog.Infof("Header:")
 		for _, h := range c.hs {
@@ -160,6 +161,7 @@ func cloneRequest(r *http.Request, body []byte) *http.Request {
 	if len(body) > 0 {
 		r2.Body = ioutil.NopCloser(bytes.NewReader(body))
 	}
+	r2.ContentLength = int64(len(body))
 	return r2
 }
 
@@ -173,7 +175,6 @@ func min(a, b int) int {
 func (c *AbBenchmark) MakeRequest(client *http.Client, thread_id int, request_index int) int {
 	body := []byte(c.GetRequest(rand.Intn(c.request_num_in_file)).content)
 
-	c.req_glob.ContentLength = int64(len(body))
 	req := cloneRequest(c.req_glob, body)
 
 	s_time := now()
@@ -207,8 +208,8 @@ func (c *AbBenchmark) Report(pcts *[]int) {
 		fmt.Printf("QPS(set)\t\t\t%d\n", c.QPS)
 	} else {
 		total_time_ms := float64(total_time / 1000.0)
-		glog.V(3).Infof("len:%d\ttotal_time:%f\tthread_num:%d\n", len(c.result_arr), total_time_ms, c.thread_num)
 		fmt.Printf("QPS(real)\t\t\t%.2f\n", float64(len(c.result_arr)*c.thread_num)*1000/total_time_ms)
+		glog.V(3).Infof("result cnt:%d\ttotal cost cpu time:%.2fms\thread num:%d\n", len(c.result_arr), total_time_ms, c.thread_num)
 	}
 
 }

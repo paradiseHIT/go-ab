@@ -10,6 +10,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"net/http"
 	"runtime"
 
@@ -25,6 +26,8 @@ type AbBenchmark struct {
 	request_file      string
 	disable_keepalive bool
 	cpus              int
+	hs                headerSlice
+	content_type      string
 
 	req_glob            *http.Request
 	result_arr          []int
@@ -43,9 +46,10 @@ func init() {
 	flag.IntVar(&(ab.QPS), "QPS", 0, "rate limit, request per second, default is 0, means use thread_num, no rate limit")
 	flag.IntVar(&(ab.time_out), "time_out", 20, "time out per request in seconds")
 	flag.StringVar(&(ab.method), "method", "GET", "http method, GET/POST/PUT")
+	flag.StringVar(&(ab.content_type), "content_type", "text/html", "Content-type")
 	flag.BoolVar(&(ab.disable_keepalive), "disable_keepalive", false, "Disable keep-alive, prevents re-use of TCP, connections between different HTTP requests.")
 	flag.IntVar(&(ab.cpus), "cpus", runtime.GOMAXPROCS(-1), "Number of used cpu cores.")
-
+	flag.Var(&(ab.hs), "Header", `Custom HTTP header. You can specify as many as needed by repeating the flag.For example, -H "Authorization: ZGI1YWYxNmQw*****" -H "Content-Type: application/xml" .`)
 }
 
 func main() {
@@ -54,11 +58,23 @@ func main() {
 
 	runtime.GOMAXPROCS(ab.cpus)
 	ab.VerifyConfig()
-	ab.PrintConfig()
+	//LoadRequestsFromFile should be in front of PrintConfig for config request_num_in_file
 	ab.LoadRequestsFromFile()
+	ab.PrintConfig()
 	ab.InitRequest()
 	ab.Ab()
 
 	pcts := []int{50, 60, 70, 80, 90, 99}
 	ab.Report(&pcts)
+}
+
+type headerSlice []string
+
+func (h *headerSlice) String() string {
+	return fmt.Sprintf("%s", *h)
+}
+
+func (h *headerSlice) Set(value string) error {
+	*h = append(*h, value)
+	return nil
 }

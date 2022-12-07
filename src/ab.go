@@ -18,6 +18,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"sync"
 	"time"
@@ -30,6 +31,9 @@ type Request struct {
 }
 
 const maxIdleConn = 500
+const (
+	headerRegexp = `^([\w-]+):\s*(.+)`
+)
 
 var mutex sync.Mutex
 
@@ -81,9 +85,21 @@ func (c *AbBenchmark) PrintConfig() {
 	glog.Infof("config request_num:\t\t\t%d", c.request_num)
 	glog.Infof("config data_file:\t\t\t%s", c.request_file)
 	glog.Infof("config url:\t\t\t\t%s", c.url)
-	glog.Infof("config QPS:\t\t\t\t%d", c.QPS)
+	if c.QPS > 0 {
+		glog.Infof("config QPS:\t\t\t\t%d", c.QPS)
+	} else {
+		glog.Infof("config QPS:\t\t\t\tunlimit")
+	}
 	glog.Infof("config Method:\t\t\t\t%s", c.method)
 	glog.Infof("config request_num_in_file:\t\t%d", c.request_num_in_file)
+	glog.Infof("config content_type:\t\t%s", c.content_type)
+	if len(c.hs) > 0 {
+		glog.Infof("Header:")
+		for _, h := range c.hs {
+			glog.Infof("\t%s", h)
+		}
+	}
+	fmt.Println()
 }
 
 func (c *AbBenchmark) InitRequest() {
@@ -98,8 +114,18 @@ func (c *AbBenchmark) InitRequest() {
 	}
 	// set content-type
 	header := make(http.Header)
-	header.Set("Content-Type", "application/json")
+	header.Set("Content-Type", c.content_type)
 	c.req_glob.Header = header
+
+	// set any other additional repeatable headers
+	for _, h := range c.hs {
+		match, err := parseInputWithRegexp(h, headerRegexp)
+		if err != nil {
+			usageAndExit(err.Error())
+		}
+		header.Set(match[1], match[2])
+	}
+
 }
 
 func (c *AbBenchmark) run(client *http.Client, thread_id int, request_per_thread int) {
@@ -108,6 +134,7 @@ func (c *AbBenchmark) run(client *http.Client, thread_id int, request_per_thread
 		throttle = time.Tick(time.Duration(1e6/(c.QPS/c.thread_num)) * time.Microsecond)
 	}
 
+	//TODO to add exit signal when user press ctrl+C
 	for j := 0; j < request_per_thread; j++ {
 		select {
 		default:
@@ -220,4 +247,13 @@ func (c *AbBenchmark) LoadRequestsFromFile() {
 
 func (c *AbBenchmark) GetRequest(index int) Request {
 	return c.request_que[index]
+}
+
+func parseInputWithRegexp(input, regx string) ([]string, error) {
+	re := regexp.MustCompile(regx)
+	matches := re.FindStringSubmatch(input)
+	if len(matches) < 1 {
+		return nil, fmt.Errorf("could not parse the provided input; input = %v", input)
+	}
+	return matches, nil
 }

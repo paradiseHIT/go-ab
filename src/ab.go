@@ -188,9 +188,7 @@ func (c *AbBenchmark) MakeRequest(client *http.Client, thread_id int, request_in
 	}
 	t := (int)((now() - s_time) / 1000)
 	c.AppendResult(t)
-	glog.V(3).Infof("thread %d, id %d, request:%s", thread_id, request_index, body)
 	return t
-
 }
 
 func (c *AbBenchmark) Report(pcts *[]int) {
@@ -234,8 +232,9 @@ func (c *AbBenchmark) LoadRequestsFromFile() {
 		glog.Errorf("Open %s failed\n", c.request_file)
 		panic(err.Error())
 	}
+	buf := []byte{}
 	fileScanner := bufio.NewScanner(rfile)
-	fileScanner.Split(bufio.ScanLines)
+	fileScanner.Buffer(buf, 16*1024*1024)
 	for fileScanner.Scan() {
 		var r Request
 		r.content = fileScanner.Text()

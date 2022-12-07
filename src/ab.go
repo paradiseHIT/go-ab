@@ -11,7 +11,9 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"math/rand"
 	"net/http"
@@ -27,98 +29,195 @@ type Request struct {
 	content string
 }
 
-var request_que []Request
+const maxIdleConn = 500
+
 var mutex sync.Mutex
 
-func ab(request_file string, requestURL string, thread_num int, total_request_num int) {
-	request_num_in_file := BuildRequests(request_file)
-	request_cnt_per_thread := int(total_request_num / thread_num)
-	remain_cnt := int(total_request_num % thread_num)
-	var request_by_threads []int
-	var request_time_arr []int
+func usageAndExit(msg string) {
+	if msg != "" {
+		fmt.Fprintf(os.Stderr, msg)
+		fmt.Fprintf(os.Stderr, "\n\n")
+	}
+	flag.Usage()
+	fmt.Fprintf(os.Stderr, "\n")
+	os.Exit(1)
+}
 
-	for i := 0; i < thread_num; i++ {
-		request_by_threads = append(request_by_threads, request_cnt_per_thread)
-	}
-	for i := 0; i < remain_cnt; i++ {
-		request_by_threads[i]++
-	}
-	for i := 0; i < thread_num; i++ {
-		glog.Infof("thread %d : %d", i, request_by_threads[i])
-	}
-
+func (c *AbBenchmark) Ab() {
 	var wg sync.WaitGroup
-	wg.Add(thread_num)
+	wg.Add(c.thread_num)
+	tr := &http.Transport{
+		DisableKeepAlives:   c.disable_keepalive,
+		MaxIdleConnsPerHost: min(c.thread_num, maxIdleConn),
+	}
+	client := &http.Client{Transport: tr, Timeout: time.Duration(c.time_out) * time.Second}
 
-	for i := 0; i < thread_num; i++ {
-		glog.Infof("Treading %d start", i)
+	request_per_thread := int(c.request_num / c.thread_num)
+	if request_per_thread <= 0 {
+		glog.Errorf("request per thread is %d\n", request_per_thread)
+		return
+	}
+	for i := 0; i < c.thread_num; i++ {
+		glog.V(3).Infof("Treading %d start", i)
 		go func(thread_id int) {
-			rand.Seed(time.Now().Unix())
-			for j := 0; j < request_by_threads[thread_id]; j++ {
-				r := getRequest(rand.Intn(request_num_in_file))
-				req := []byte(r.content)
-				//us
-				start_time := time.Now().Nanosecond() / 1000
-				resp, err := http.Post(requestURL, "application/json", bytes.NewBuffer(req))
-				t := time.Now().Nanosecond()/1000 - start_time
-				if err != nil {
-					glog.Errorf("post %s error, %s", r.content, err.Error())
-					panic("post error")
-				}
-				respBytes, err := ioutil.ReadAll(resp.Body)
-				AppendRequest(&request_time_arr, t)
-				glog.Infof("thread %d, request %d, randInt %d, value:%s, result:%s", thread_id, j, rand.Intn(request_num_in_file), r.content, string(respBytes))
-			}
+			c.run(client, thread_id, request_per_thread)
 			wg.Done()
 		}(i)
 	}
 	wg.Wait()
-	glog.Infof("len(request_time_arr):%d, total_request_num:%d", len(request_time_arr), total_request_num)
-	for i := 0; i < len(request_time_arr); i++ {
-		glog.Infof("request_cost[%d]=%d", i, request_time_arr[i])
-	}
-	sort.Ints(request_time_arr)
-	fmt.Println(request_time_arr)
-	pcts := []int{50, 90}
-	pcts_value := ArrayInfo(&request_time_arr, &pcts)
-	fmt.Println(pcts_value)
 }
-func AppendRequest(arr_in *[]int, req int) {
+
+func (c *AbBenchmark) VerifyConfig() {
+	if c.request_file == "" {
+		usageAndExit("Please specify data_file")
+	}
+	if c.url == "" {
+		usageAndExit("Please specify url")
+	}
+}
+
+func (c *AbBenchmark) PrintConfig() {
+	glog.Infof("config thread_num:\t\t\t%d", c.thread_num)
+	glog.Infof("config request_num:\t\t\t%d", c.request_num)
+	glog.Infof("config data_file:\t\t\t%s", c.request_file)
+	glog.Infof("config url:\t\t\t\t%s", c.url)
+	glog.Infof("config QPS:\t\t\t\t%d", c.QPS)
+	glog.Infof("config Method:\t\t\t\t%s", c.method)
+	glog.Infof("config request_num_in_file:\t\t%d", c.request_num_in_file)
+}
+
+func (c *AbBenchmark) InitRequest() {
+	var err error
+	/*
+		Don't New Request every time in MakeRequest, it will cost large amount of connections
+		We can clone request from one, just set different body
+	*/
+	c.req_glob, err = http.NewRequest(c.method, c.url, nil)
+	if err != nil {
+		usageAndExit(err.Error())
+	}
+	// set content-type
+	header := make(http.Header)
+	header.Set("Content-Type", "application/json")
+	c.req_glob.Header = header
+}
+
+func (c *AbBenchmark) run(client *http.Client, thread_id int, request_per_thread int) {
+	var throttle <-chan time.Time
+	if c.QPS > 0 {
+		throttle = time.Tick(time.Duration(1e6/(c.QPS/c.thread_num)) * time.Microsecond)
+	}
+
+	for j := 0; j < request_per_thread; j++ {
+		select {
+		default:
+			if c.QPS > 0 {
+				<-throttle
+			}
+			c.MakeRequest(client, thread_id, j)
+		}
+	}
+}
+
+// cloneRequest returns a clone of the provided *http.Request.
+// The clone is a shallow copy of the struct and its Header map.
+func cloneRequest(r *http.Request, body []byte) *http.Request {
+	// shallow copy of the struct
+	r2 := new(http.Request)
+	*r2 = *r
+	// deep copy of the Header
+	r2.Header = make(http.Header, len(r.Header))
+	for k, s := range r.Header {
+		r2.Header[k] = append([]string(nil), s...)
+	}
+	if len(body) > 0 {
+		r2.Body = ioutil.NopCloser(bytes.NewReader(body))
+	}
+	return r2
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func (c *AbBenchmark) MakeRequest(client *http.Client, thread_id int, request_index int) int {
+	body := []byte(c.GetRequest(rand.Intn(c.request_num_in_file)).content)
+
+	c.req_glob.ContentLength = int64(len(body))
+	req := cloneRequest(c.req_glob, body)
+
+	s_time := now()
+	resp, err := client.Do(req)
+	if err == nil {
+		glog.V(3).Infof("return code :%d", resp.StatusCode)
+		io.Copy(ioutil.Discard, resp.Body)
+		resp.Body.Close()
+	} else {
+		glog.Errorf("post %s error, %s", body, err.Error())
+		panic("post error")
+	}
+	t := (int)((now() - s_time) / 1000000)
+	c.AppendResult(t)
+	glog.V(3).Infof("thread %d, id %d, request:%s", thread_id, request_index, body)
+	return t
+
+}
+
+func (c *AbBenchmark) Report(pcts *[]int) {
+	sort.Ints(c.result_arr)
+	pcts_value := c.ArrayInfo(pcts)
+	fmt.Printf("threads\t\t\t\t%d\n", c.thread_num)
+	for i := 0; i < len(*pcts); i++ {
+		fmt.Printf("%d%%\t\t\t\t%dms\n", (*pcts)[i], pcts_value[i])
+	}
+	var total_time = 0
+	for i := 0; i < len(c.result_arr); i++ {
+		total_time += (c.result_arr)[i]
+	}
+	fmt.Printf("Avg\t\t\t\t%dms\n", total_time/len(c.result_arr))
+	if c.QPS > 0 {
+		fmt.Printf("QPS(set)\t\t\t%d\n", c.QPS)
+	} else {
+		fmt.Printf("QPS(real)\t\t\t%d\n", len(c.result_arr)*1000000/total_time*c.thread_num)
+	}
+
+}
+func (c *AbBenchmark) AppendResult(req int) {
 	mutex.Lock()
-	*arr_in = append(*arr_in, req)
+	c.result_arr = append(c.result_arr, req)
 	mutex.Unlock()
 }
 
-func ArrayInfo(arr_in *[]int, pcts *[]int) []int {
-	total_len := len(*arr_in)
+func (c *AbBenchmark) ArrayInfo(pcts *[]int) []int {
+	total_len := len(c.result_arr)
 	var pcts_value []int
-	glog.Infof("len(*arr_in):%d", len(*arr_in))
-	glog.Infof("len(*pcts):%d", len(*pcts))
 	for i := 0; i < len(*pcts); i++ {
 		offset := int(total_len*(*pcts)[i]/100) - 1
-		glog.Infof("offset:%d", offset)
-		pcts_value = append(pcts_value, (*arr_in)[offset])
+		pcts_value = append(pcts_value, c.result_arr[offset])
 	}
 	return pcts_value
 }
 
-func BuildRequests(request_file string) int {
-	rfile, err := os.Open(request_file)
+func (c *AbBenchmark) LoadRequestsFromFile() {
+	rfile, err := os.Open(c.request_file)
 	if err != nil {
-		glog.Errorf("Open %s failed\n", request_file)
-		return -1
+		glog.Errorf("Open %s failed\n", c.request_file)
+		panic(err.Error())
 	}
 	fileScanner := bufio.NewScanner(rfile)
 	fileScanner.Split(bufio.ScanLines)
 	for fileScanner.Scan() {
 		var r Request
 		r.content = fileScanner.Text()
-		request_que = append(request_que, r)
+		c.request_que = append(c.request_que, r)
 	}
-	return len(request_que)
-
+	c.request_num_in_file = len(c.request_que)
+	glog.V(3).Infof("request_num_in_file:%d", len(c.request_que))
 }
 
-func getRequest(index int) Request {
-	return request_que[index]
+func (c *AbBenchmark) GetRequest(index int) Request {
+	return c.request_que[index]
 }

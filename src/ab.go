@@ -206,7 +206,9 @@ func (c *AbBenchmark) Report(pcts *[]int) {
 	if c.QPS > 0 {
 		fmt.Printf("QPS(set)\t\t\t%d\n", c.QPS)
 	} else {
-		fmt.Printf("QPS(real)\t\t\t%d\n", len(c.result_arr)*1000000/total_time*c.thread_num)
+		total_time_ms := float64(total_time / 1000.0)
+		glog.V(3).Infof("len:%d\ttotal_time:%f\tthread_num:%d\n", len(c.result_arr), total_time_ms, c.thread_num)
+		fmt.Printf("QPS(real)\t\t\t%.2f\n", float64(len(c.result_arr)*c.thread_num)*1000/total_time_ms)
 	}
 
 }

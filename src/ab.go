@@ -159,7 +159,7 @@ func (c *AbBenchmark) MakeRequest(client *http.Client, thread_id int, request_in
 		glog.Errorf("post %s error, %s", body, err.Error())
 		panic("post error")
 	}
-	t := (int)((now() - s_time) / 1000000)
+	t := (int)((now() - s_time) / 1000)
 	c.AppendResult(t)
 	glog.V(3).Infof("thread %d, id %d, request:%s", thread_id, request_index, body)
 	return t
@@ -171,13 +171,13 @@ func (c *AbBenchmark) Report(pcts *[]int) {
 	pcts_value := c.ArrayInfo(pcts)
 	fmt.Printf("threads\t\t\t\t%d\n", c.thread_num)
 	for i := 0; i < len(*pcts); i++ {
-		fmt.Printf("%d%%\t\t\t\t%dms\n", (*pcts)[i], pcts_value[i])
+		fmt.Printf("%d%%\t\t\t\t%dus\n", (*pcts)[i], pcts_value[i])
 	}
 	var total_time = 0
 	for i := 0; i < len(c.result_arr); i++ {
 		total_time += (c.result_arr)[i]
 	}
-	fmt.Printf("Avg\t\t\t\t%dms\n", total_time/len(c.result_arr))
+	fmt.Printf("Avg\t\t\t\t%dus\n", total_time/len(c.result_arr))
 	if c.QPS > 0 {
 		fmt.Printf("QPS(set)\t\t\t%d\n", c.QPS)
 	} else {

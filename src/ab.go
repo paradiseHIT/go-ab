@@ -78,7 +78,7 @@ func (c *AbBenchmark) VerifyConfig() {
 		usageAndExit("Please specify request_file when http method set POST")
 	}
 	if c.url == "" {
-		usageAndExit("Please specify url")
+		usageAndExit("")
 	}
 	if c.duration > 0 {
 		c.request_num = math.MaxInt32
@@ -120,8 +120,8 @@ func (c *AbBenchmark) Init() {
 func (c *AbBenchmark) InitRequest() {
 	var err error
 	/*
-		Don't New Request every time in MakeRequest, it will cost large amount of connections
-		We can clone request from one, just set different body
+	   Don't New Request every time in MakeRequest, it will cost large amount of connections
+	   We can clone request from one, just set different body
 	*/
 	c.req_glob, err = http.NewRequest(c.method, c.url, nil)
 	if err != nil {

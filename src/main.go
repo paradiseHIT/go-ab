@@ -12,7 +12,10 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"os"
+	"os/signal"
 	"runtime"
+	"time"
 
 	"github.com/golang/glog"
 )
@@ -28,7 +31,9 @@ type AbBenchmark struct {
 	cpus              int
 	hs                headerSlice
 	content_type      string
+	duration          time.Duration
 
+	stop_sig            chan struct{}
 	req_glob            *http.Request
 	result_arr          []int
 	request_num_in_file int
@@ -50,6 +55,7 @@ func init() {
 	flag.BoolVar(&(ab.disable_keepalive), "disable_keepalive", false, "Disable keep-alive, prevents re-use of TCP, connections between different HTTP requests.")
 	flag.IntVar(&(ab.cpus), "cpus", runtime.GOMAXPROCS(-1), "Number of used cpu cores.")
 	flag.Var(&(ab.hs), "header", `Custom HTTP header. You can specify as many as needed by repeating the flag.For example, -H "Authorization: ZGI1YWYxNmQw*****" -H "Content-Type: application/xml" .`)
+	flag.DurationVar(&(ab.duration), "duration", 0, "Duration of application to send requests. When duration is reached, application stops and exits. If duration is specified, request_num is ignored. Examples: -duration 10s -duration 3m.")
 }
 
 func main() {
@@ -58,12 +64,23 @@ func main() {
 
 	runtime.GOMAXPROCS(ab.cpus)
 	ab.VerifyConfig()
-	//LoadRequestsFromFile should be in front of PrintConfig for config request_num_in_file
-	ab.LoadRequestsFromFile()
-	ab.PrintConfig()
-	ab.InitRequest()
-	ab.Ab()
 
+	ab.Init()
+	ab.PrintConfig()
+
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+	go func() {
+		<-c
+		ab.Stop()
+	}()
+	if ab.duration > 0 {
+		go func() {
+			time.Sleep(ab.duration)
+			ab.Stop()
+		}()
+	}
+	ab.Ab()
 	pcts := []int{50, 60, 70, 80, 90, 99}
 	ab.Report(&pcts)
 }

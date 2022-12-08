@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math"
 	"math/rand"
 	"net/http"
 	"os"
@@ -54,6 +55,7 @@ func (c *AbBenchmark) Ab() {
 		DisableKeepAlives:   c.disable_keepalive,
 		MaxIdleConnsPerHost: min(c.thread_num, maxIdleConn),
 	}
+	//reuse the http client to get high performance
 	client := &http.Client{Transport: tr, Timeout: time.Duration(c.time_out) * time.Second}
 
 	request_per_thread := int(c.request_num / c.thread_num)
@@ -78,6 +80,9 @@ func (c *AbBenchmark) VerifyConfig() {
 	if c.url == "" {
 		usageAndExit("Please specify url")
 	}
+	if c.duration > 0 {
+		c.request_num = math.MaxInt32
+	}
 }
 
 func (c *AbBenchmark) PrintConfig() {
@@ -94,6 +99,7 @@ func (c *AbBenchmark) PrintConfig() {
 	glog.Infof("config request_num_in_file:\t\t%d", c.request_num_in_file)
 	glog.Infof("config content_type:\t\t\t%s", c.content_type)
 	glog.Infof("config time_out:\t\t\t%d", c.time_out)
+	glog.Infof("config duration:\t\t\t%v", c.duration)
 	if len(c.hs) > 0 {
 		glog.Infof("Header:")
 		for _, h := range c.hs {
@@ -103,6 +109,12 @@ func (c *AbBenchmark) PrintConfig() {
 	fmt.Println()
 }
 
+func (c *AbBenchmark) Init() {
+	c.stop_sig = make(chan struct{}, c.thread_num)
+	//LoadRequestsFromFile should be in front of PrintConfig for config request_num_in_file
+	c.LoadRequestsFromFile()
+	c.InitRequest()
+}
 func (c *AbBenchmark) InitRequest() {
 	var err error
 	/*
@@ -138,6 +150,8 @@ func (c *AbBenchmark) run(client *http.Client, thread_id int, request_per_thread
 	//TODO to add exit signal when user press ctrl+C
 	for j := 0; j < request_per_thread; j++ {
 		select {
+		case <-c.stop_sig:
+			return
 		default:
 			if c.QPS > 0 {
 				<-throttle
@@ -249,6 +263,12 @@ func (c *AbBenchmark) LoadRequestsFromFile() {
 
 func (c *AbBenchmark) GetRequest(index int) Request {
 	return c.request_que[index]
+}
+
+func (c *AbBenchmark) Stop() {
+	for i := 0; i < c.thread_num; i++ {
+		c.stop_sig <- struct{}{}
+	}
 }
 
 func parseInputWithRegexp(input, regx string) ([]string, error) {

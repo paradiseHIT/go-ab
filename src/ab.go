@@ -74,8 +74,8 @@ func (c *AbBenchmark) Ab() {
 }
 
 func (c *AbBenchmark) VerifyConfig() {
-	if c.request_file == "" {
-		usageAndExit("Please specify data_file")
+	if c.request_file == "" && c.method == "POST" {
+		usageAndExit("Please specify request_file when http method set POST")
 	}
 	if c.url == "" {
 		usageAndExit("Please specify url")
@@ -88,14 +88,14 @@ func (c *AbBenchmark) VerifyConfig() {
 func (c *AbBenchmark) PrintConfig() {
 	glog.Infof("config thread_num:\t\t\t%d", c.thread_num)
 	glog.Infof("config request_num:\t\t\t%d", c.request_num)
-	glog.Infof("config data_file:\t\t\t%s", c.request_file)
+	glog.Infof("config request_file:\t\t\t%s", c.request_file)
 	glog.Infof("config url:\t\t\t\t%s", c.url)
 	if c.QPS > 0 {
 		glog.Infof("config QPS:\t\t\t\t%d", c.QPS)
 	} else {
 		glog.Infof("config QPS:\t\t\t\tunlimit")
 	}
-	glog.Infof("config Method:\t\t\t\t%s", c.method)
+	glog.Infof("config method:\t\t\t\t%s", c.method)
 	glog.Infof("config request_num_in_file:\t\t%d", c.request_num_in_file)
 	glog.Infof("config content_type:\t\t\t%s", c.content_type)
 	glog.Infof("config time_out:\t\t\t%d", c.time_out)
@@ -112,7 +112,9 @@ func (c *AbBenchmark) PrintConfig() {
 func (c *AbBenchmark) Init() {
 	c.stop_sig = make(chan struct{}, c.thread_num)
 	//LoadRequestsFromFile should be in front of PrintConfig for config request_num_in_file
-	c.LoadRequestsFromFile()
+	if c.request_file != "" {
+		c.LoadRequestsFromFile()
+	}
 	c.InitRequest()
 }
 func (c *AbBenchmark) InitRequest() {
@@ -144,7 +146,7 @@ func (c *AbBenchmark) InitRequest() {
 func (c *AbBenchmark) run(client *http.Client, thread_id int, request_per_thread int) {
 	var throttle <-chan time.Time
 	if c.QPS > 0 {
-		throttle = time.Tick(time.Duration(1e6/(c.QPS/c.thread_num)) * time.Microsecond)
+		throttle = time.Tick(time.Duration(1e6/(float32(c.QPS)/float32(c.thread_num))) * time.Microsecond)
 	}
 
 	//TODO to add exit signal when user press ctrl+C
@@ -186,8 +188,18 @@ func min(a, b int) int {
 	return b
 }
 
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func (c *AbBenchmark) MakeRequest(client *http.Client, thread_id int, request_index int) int {
-	body := []byte(c.GetRequest(rand.Intn(c.request_num_in_file)).content)
+	var body []byte
+	if c.request_num_in_file > 0 {
+		body = []byte(c.GetRequest(rand.Intn(c.request_num_in_file)).content)
+	}
 
 	req := cloneRequest(c.req_glob, body)
 
@@ -221,7 +233,7 @@ func (c *AbBenchmark) Report(pcts *[]int) {
 	if c.QPS > 0 {
 		fmt.Printf("QPS(set)\t\t\t%d\n", c.QPS)
 	} else {
-		total_time_ms := float64(total_time / 1000.0)
+		total_time_ms := float64(total_time) / 1000.0
 		fmt.Printf("QPS(real)\t\t\t%.2f\n", float64(len(c.result_arr)*c.thread_num)*1000/total_time_ms)
 		glog.V(3).Infof("result cnt:%d\ttotal cost cpu time:%.2fms\thread num:%d\n", len(c.result_arr), total_time_ms, c.thread_num)
 	}
@@ -237,7 +249,7 @@ func (c *AbBenchmark) ArrayInfo(pcts *[]int) []int {
 	total_len := len(c.result_arr)
 	var pcts_value []int
 	for i := 0; i < len(*pcts); i++ {
-		offset := int(total_len*(*pcts)[i]/100) - 1
+		offset := max(0, int(float64(total_len)*float64((*pcts)[i])/100.0)-1)
 		pcts_value = append(pcts_value, c.result_arr[offset])
 	}
 	return pcts_value

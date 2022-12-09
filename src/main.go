@@ -27,11 +27,13 @@ type AbBenchmark struct {
 	request_num       int
 	QPS               int
 	request_file      string
+	request_is_path   bool
 	disable_keepalive bool
 	cpus              int
 	hs                headerSlice
 	content_type      string
 	duration          time.Duration
+	debug             bool
 
 	stop_sig            chan struct{}
 	req_glob            *http.Request
@@ -47,40 +49,46 @@ func init() {
 	flag.IntVar(&(ab.thread_num), "thread_num", 1, "total thread num")
 	flag.IntVar(&(ab.request_num), "request_num", 1000, "total request num")
 	flag.StringVar(&(ab.request_file), "request_file", "", "request data file, per line for one requst")
+	flag.BoolVar(&(ab.request_is_path), "request_is_path", false, "whether request data is path, if true, read the data from path to generate the body, default is false")
 	flag.StringVar(&(ab.url), "url", "", "url to accept the request")
 	flag.IntVar(&(ab.QPS), "QPS", 0, "rate limit, request per second, default is 0, means use thread_num, no rate limit")
 	flag.IntVar(&(ab.time_out), "time_out", 20, "time out per request in seconds")
 	flag.StringVar(&(ab.method), "method", "GET", "http method, GET/POST/PUT")
 	flag.StringVar(&(ab.content_type), "content_type", "text/html", "Content-type")
 	flag.BoolVar(&(ab.disable_keepalive), "disable_keepalive", false, "Disable keep-alive, prevents re-use of TCP, connections between different HTTP requests.")
+	flag.BoolVar(&(ab.debug), "debug", false, "debug mode, each request will print the response data")
 	flag.IntVar(&(ab.cpus), "cpus", runtime.GOMAXPROCS(-1), "Number of used cpu cores.")
 	flag.Var(&(ab.hs), "header", `Custom HTTP header. You can specify as many as needed by repeating the flag.For example, -H "Authorization: ZGI1YWYxNmQw*****" -H "Content-Type: application/xml" .`)
 	flag.DurationVar(&(ab.duration), "duration", 0, "Duration of application to send requests. When duration is reached, application stops and exits. If duration is specified, request_num is ignored. Examples: -duration 10s -duration 3m.")
+
 }
 
 var usage = `Usage: go-ab [options...]
 
 Options:
-  -thread_num         total thread num, default is 1
-  -request_num        total request num, default is 1000
-  -request_file       request data file, per line for one requst
-  -url                url to accept the request
-  -QPS                rate limit, request per second. default is 0, means use
-                      thread_num, no rate limit
-  -time_out           time out per request in seconds, default is 20
-  -method             http method, GET/POST/PUT, default is "GET"
-  -content_type       Content-type, default is "text/html"
-  -disable_keepalive  Disable keep-alive, prevents re-use of TCP, connections 
-                      between different HTTP requests.
-  -cpus               Number of used cpu cores.
-                      default for current machine %d cores
-  -header             Custom HTTP header. You can specify as many as needed by
-                      repeating the flag. For example:
-                        -H "Authorization: ZGI1YWYxNmQw*****"
-                        -H "Content-Type: application/xml"
-  -duration           Duration of application to send requests. When duration is
-                      reached, application stops and exits. If duration is specified,
-                      request_num is ignored. Examples: -duration 10s -duration 3m.
+  -thread_num               total thread num, default is 1
+  -request_num              total request num, default is 1000
+  -request_file             request data file, per line for one requst
+  -request_file_is_path     whether request data is path, if true, read the data
+                            from path to generate the body, default is false
+  -url                      url to accept the request
+  -QPS                      rate limit, request per second. default is 0, use
+                            thread_num, no rate limit
+  -time_out                 time out per request in seconds, default is 20
+  -method                   http method, GET/POST/PUT, default is "GET"
+  -content_type             Content-type, default is "text/html"
+  -disable_keepalive        Disable keep-alive, prevents re-use of TCP, connections 
+                            between different HTTP requests.
+  -cpus                     Number of used cpu cores.
+                            default for current machine %d cores
+  -header                   Custom HTTP header. You can specify as many as needed by
+                            repeating the flag. For example:
+                                -H "Authorization: ZGI1YWYxNmQw*****"
+                                -H "Content-Type: application/xml"
+  -duration                 Duration of application to send requests. When duration is
+                            reached, application stops and exits. If duration is specified,
+                            request_num is ignored. Examples: -duration 10s -duration 3m.
+  -debug                    debug mode, each request will print the response data
 
 `
 

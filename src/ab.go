@@ -28,10 +28,13 @@ import (
 )
 
 type Request struct {
-	content string
+	content []byte
 }
 
 const maxIdleConn = 500
+
+// max request body size is set 16M
+const maxRequestBodySize = 16 * 1024 * 1024
 const (
 	headerRegexp = `^([\w-]+):\s*(.+)`
 )
@@ -89,6 +92,7 @@ func (c *AbBenchmark) PrintConfig() {
 	glog.Infof("config thread_num:\t\t\t%d", c.thread_num)
 	glog.Infof("config request_num:\t\t\t%d", c.request_num)
 	glog.Infof("config request_file:\t\t\t%s", c.request_file)
+	glog.Infof("config request_is_path:\t\t\t%v", c.request_is_path)
 	glog.Infof("config url:\t\t\t\t%s", c.url)
 	if c.QPS > 0 {
 		glog.Infof("config QPS:\t\t\t\t%d", c.QPS)
@@ -106,6 +110,10 @@ func (c *AbBenchmark) PrintConfig() {
 			glog.Infof("\t%s", h)
 		}
 	}
+	if c.debug {
+		glog.Infof("config mode:\t\t\tdebug")
+	}
+
 	fmt.Println()
 }
 
@@ -198,7 +206,7 @@ func max(a, b int) int {
 func (c *AbBenchmark) MakeRequest(client *http.Client, thread_id int, request_index int) int {
 	var body []byte
 	if c.request_num_in_file > 0 {
-		body = []byte(c.GetRequest(rand.Intn(c.request_num_in_file)).content)
+		body = c.GetRequest(rand.Intn(c.request_num_in_file)).content
 	}
 
 	req := cloneRequest(c.req_glob, body)
@@ -206,7 +214,15 @@ func (c *AbBenchmark) MakeRequest(client *http.Client, thread_id int, request_in
 	s_time := now()
 	resp, err := client.Do(req)
 	if err == nil {
-		glog.V(3).Infof("return code :%d", resp.StatusCode)
+		if c.debug {
+			resp_data, resp_err := ioutil.ReadAll(resp.Body)
+			glog.Infof("return code :%d", resp.StatusCode)
+			if resp_err == nil {
+				glog.Infof("return resp :%s", resp_data)
+			} else {
+				glog.Infof("return error :%s", resp_err.Error())
+			}
+		}
 		io.Copy(ioutil.Discard, resp.Body)
 		resp.Body.Close()
 	} else {
@@ -221,21 +237,24 @@ func (c *AbBenchmark) MakeRequest(client *http.Client, thread_id int, request_in
 func (c *AbBenchmark) Report(pcts *[]int) {
 	sort.Ints(c.result_arr)
 	pcts_value := c.ArrayInfo(pcts)
-	fmt.Printf("threads\t\t\t\t%d\n", c.thread_num)
+	fmt.Printf("Thread num\t\t\t\t%d\n", c.thread_num)
+	fmt.Printf("Total request:\t\t\t\t%d\n", len(c.result_arr))
 	for i := 0; i < len(*pcts); i++ {
-		fmt.Printf("%d%%\t\t\t\t%dus\n", (*pcts)[i], pcts_value[i])
+		fmt.Printf("%d%%\t\t\t\t\t%dus\n", (*pcts)[i], pcts_value[i])
 	}
 	var total_time = 0
 	for i := 0; i < len(c.result_arr); i++ {
 		total_time += (c.result_arr)[i]
 	}
-	fmt.Printf("Avg\t\t\t\t%dus\n", total_time/len(c.result_arr))
+	fmt.Printf("Avg\t\t\t\t\t%dus\n", total_time/len(c.result_arr))
 	if c.QPS > 0 {
-		fmt.Printf("QPS(set)\t\t\t%d\n", c.QPS)
+		fmt.Printf("QPS(set)\t\t\t\t%d\n", c.QPS)
 	} else {
 		total_time_ms := float64(total_time) / 1000.0
-		fmt.Printf("QPS(real)\t\t\t%.2f\n", float64(len(c.result_arr)*c.thread_num)*1000/total_time_ms)
-		glog.V(3).Infof("result cnt:%d\ttotal cost cpu time:%.2fms\thread num:%d\n", len(c.result_arr), total_time_ms, c.thread_num)
+		fmt.Printf("QPS(real)\t\t\t\t%.2f\n", float64(len(c.result_arr)*c.thread_num)*1000/total_time_ms)
+		if c.debug {
+			glog.Infof("result cnt:%d\ttotal cost cpu time:%.2fms\tthread num:%d\n", len(c.result_arr), total_time_ms, c.thread_num)
+		}
 	}
 
 }
@@ -263,10 +282,21 @@ func (c *AbBenchmark) LoadRequestsFromFile() {
 	}
 	buf := []byte{}
 	fileScanner := bufio.NewScanner(rfile)
-	fileScanner.Buffer(buf, 16*1024*1024)
+	fileScanner.Buffer(buf, maxRequestBodySize)
 	for fileScanner.Scan() {
 		var r Request
-		r.content = fileScanner.Text()
+		read_line := fileScanner.Text()
+		if c.request_is_path {
+			f, err := os.Open(read_line)
+			check(err)
+			body := make([]byte, maxRequestBodySize)
+			n, err := f.Read(body)
+			check(err)
+			r.content = body[:n]
+			check(f.Close())
+		} else {
+			r.content = []byte(read_line)
+		}
 		c.request_que = append(c.request_que, r)
 	}
 	c.request_num_in_file = len(c.request_que)
@@ -290,4 +320,10 @@ func parseInputWithRegexp(input, regx string) ([]string, error) {
 		return nil, fmt.Errorf("could not parse the provided input; input = %v", input)
 	}
 	return matches, nil
+}
+
+func check(e error) {
+	if e != nil {
+		panic(e)
+	}
 }
